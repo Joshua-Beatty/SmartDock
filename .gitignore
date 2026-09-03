@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+dist/
+certs/
+research/
+scripts/setup-signing.sh
+.DS_Store
+*.log
