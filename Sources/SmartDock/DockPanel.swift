@@ -57,7 +57,9 @@ final class DockPanel {
         panel = NSPanel(contentRect: .zero,
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
-        panel.level = .floating
+        // One notch above normal windows: floats over every app window but stays
+        // below system UI (screenshot thumbnail, notification banners, palettes).
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
