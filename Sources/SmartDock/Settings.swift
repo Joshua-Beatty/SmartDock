@@ -37,6 +37,25 @@ struct PinnedApp: Codable, Equatable, Identifiable {
     }
 }
 
+/// Storage granularity per numeric setting — sliders, typed entry, and persisted
+/// values all snap to these steps. Integer-step settings display whole numbers;
+/// 0.1-step settings always show one decimal, so the precision is visible.
+enum SettingStep {
+    static let thickness = 1.0     // pt
+    static let itemLength = 1.0    // pt (0 stays the "auto" sentinel)
+    static let iconSize = 1.0      // pt
+    static let textSize = 0.1      // pt
+    static let itemPadding = 0.1   // pt
+    static let itemMargin = 0.1    // pt
+}
+
+extension Double {
+    /// Snap to a step grid, then strip binary float dust so stored JSON stays clean.
+    func quantized(_ step: Double) -> Double {
+        ((self / step).rounded() * step * 1000).rounded() / 1000
+    }
+}
+
 /// The settings a bar renders with.
 struct BarSettings: Codable, Equatable {
     var textSize: Double = 11
@@ -68,6 +87,18 @@ struct BarSettings: Codable, Equatable {
         itemLength = try c.decodeIfPresent(Double.self, forKey: .itemLength) ?? 0
         itemAlignment = try c.decodeIfPresent(BarAlignment.self, forKey: .itemAlignment) ?? .center
     }
+
+    /// Snap every numeric field to its declared step (SettingStep) — applied to
+    /// loaded, pasted, and imported values so raw pre-quantization doubles from
+    /// old builds get cleaned up on the way in.
+    mutating func quantize() {
+        textSize = textSize.quantized(SettingStep.textSize)
+        thickness = thickness.quantized(SettingStep.thickness)
+        iconSize = iconSize.quantized(SettingStep.iconSize)
+        itemPadding = itemPadding.quantized(SettingStep.itemPadding)
+        itemMargin = itemMargin.quantized(SettingStep.itemMargin)
+        if itemLength > 0 { itemLength = itemLength.quantized(SettingStep.itemLength) }
+    }
 }
 
 // MARK: - Main-axis geometry (single source of truth for DockView layout and DockPanel scrolling)
@@ -98,6 +129,16 @@ struct MonitorSettings: Codable, Equatable {
     var fullSpan: Bool?
     var itemLength: Double?
     var itemAlignment: BarAlignment?
+
+    /// Snap every present numeric override to its declared step (SettingStep).
+    mutating func quantize() {
+        textSize = textSize?.quantized(SettingStep.textSize)
+        thickness = thickness?.quantized(SettingStep.thickness)
+        iconSize = iconSize?.quantized(SettingStep.iconSize)
+        itemPadding = itemPadding?.quantized(SettingStep.itemPadding)
+        itemMargin = itemMargin?.quantized(SettingStep.itemMargin)
+        if let l = itemLength, l > 0 { itemLength = l.quantized(SettingStep.itemLength) }
+    }
 }
 
 final class SettingsStore: ObservableObject {
@@ -118,9 +159,15 @@ final class SettingsStore: ObservableObject {
         // `monitors` before it has been loaded — wiping all overrides on every launch.
         let dec = JSONDecoder()
         if let d = Self.prefs.data(forKey: "defaults"),
-           let v = try? dec.decode(BarSettings.self, from: d) { _defaults = Published(initialValue: v) }
+           var v = try? dec.decode(BarSettings.self, from: d) {
+            v.quantize()   // migrate raw slider doubles saved by older builds
+            _defaults = Published(initialValue: v)
+        }
         if let d = Self.prefs.data(forKey: "monitors"),
-           let v = try? dec.decode([String: MonitorSettings].self, from: d) { _monitors = Published(initialValue: v) }
+           var v = try? dec.decode([String: MonitorSettings].self, from: d) {
+            for key in v.keys { v[key]?.quantize() }
+            _monitors = Published(initialValue: v)
+        }
         _interceptZoom = Published(initialValue: Self.prefs.bool(forKey: "interceptZoom"))
         Debug.slog("loaded defaults=\(Self.prefs.data(forKey: "defaults")?.count ?? -1)B monitors=\(Self.prefs.data(forKey: "monitors")?.count ?? -1)B → \(overrideSummary())")
     }

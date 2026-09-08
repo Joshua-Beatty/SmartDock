@@ -132,10 +132,13 @@ extension SettingsStore {
         guard env.kind == "profile", let profile = env.profile else { throw TransferError.notAProfile }
         if let uuid {
             let name = monitors[uuid]?.name ?? "Monitor"
-            monitors[uuid] = profile.asOverrides(name: name)
+            var m = profile.asOverrides(name: name)
+            m.quantize()
+            monitors[uuid] = m
         } else {
             var d = defaults
             profile.applied(to: &d)
+            d.quantize()
             defaults = d
         }
     }
@@ -151,8 +154,12 @@ extension SettingsStore {
     func importAll(_ data: Data) throws {
         let env = try Self.decodeEnvelope(data)
         guard env.kind == "all", let all = env.all else { throw TransferError.notABackup }
-        defaults = all.defaults
-        monitors = all.monitors
+        var d = all.defaults
+        d.quantize()
+        var ms = all.monitors
+        for key in ms.keys { ms[key]?.quantize() }
+        defaults = d
+        monitors = ms
         interceptZoom = all.interceptZoom
     }
 }

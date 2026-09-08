@@ -223,12 +223,36 @@ private struct PositionControl: View {
     }
 }
 
-private struct SliderControl: View {
+/// Slider + exact-entry field, both snapped to `step`. Integer-step settings show
+/// whole numbers; 0.1-step settings always show one decimal — the precision of
+/// each setting is visible at a glance (and spelled out in the field's tooltip).
+private struct NumberControl: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
+    var step: Double = 1
+
+    private var decimals: Int { step < 0.05 ? 2 : step < 0.5 ? 1 : 0 }
+
+    /// Everything written through here lands clamped and step-aligned.
+    private var quantized: Binding<Double> {
+        Binding(get: { value },
+                set: { value = min(max($0, range.lowerBound), range.upperBound).quantized(step) })
+    }
+
     var body: some View {
-        Slider(value: $value, in: range)
-        Text("\(Int(value)) pt").monospacedDigit().frame(width: 44, alignment: .trailing)
+        Slider(value: quantized, in: range)
+        TextField("", value: quantized, format: .number.precision(.fractionLength(decimals)))
+            .textFieldStyle(.roundedBorder)
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .frame(width: 58)
+            .help(help)
+        Text("pt").foregroundStyle(.secondary)
+    }
+
+    private var help: String {
+        let f = { (v: Double) in v.formatted(.number.precision(.fractionLength(0...decimals))) }
+        return "\(f(range.lowerBound))–\(f(range.upperBound)) pt, in steps of \(f(step)) pt"
     }
 }
 
@@ -246,16 +270,48 @@ private struct AlignmentControl: View {
     }
 }
 
-/// Slider with an Auto reset button; 0 encodes "auto". Dragging the slider
-/// leaves auto mode implicitly.
+/// Slider with exact entry and an Auto reset; 0 encodes "auto" (150 pt effective).
+/// Editing either control leaves auto mode; clearing the field (or typing "auto")
+/// returns to it. Whole points, like the other length settings.
 private struct AutoLengthControl: View {
     @Binding var value: Double
+    @FocusState private var focused: Bool
+    @State private var text = ""
+
+    private let range: ClosedRange<Double> = 60...400
+
     var body: some View {
-        Slider(value: Binding(get: { value == 0 ? 150 : value }, set: { value = $0 }), in: 60...400)
-        Text(value == 0 ? "Auto" : "\(Int(value)) pt")
-            .monospacedDigit().frame(width: 44, alignment: .trailing)
+        Slider(value: Binding(get: { value == 0 ? 150 : value },
+                              set: { value = $0.quantized(SettingStep.itemLength) }),
+               in: range)
+        TextField("Auto", text: $text)
+            .focused($focused)
+            .onSubmit(commit)
+            .onChange(of: focused) { if !$0 { commit() } }
+            .onChange(of: value) { _ in if !focused { sync() } }
+            .onAppear(perform: sync)
+            .textFieldStyle(.roundedBorder)
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .frame(width: 58)
+            .help("\(Int(range.lowerBound))–\(Int(range.upperBound)) pt, in steps of 1 pt — leave empty for Auto")
+        Text("pt").foregroundStyle(.secondary)
         Button("Auto") { value = 0 }
             .disabled(value == 0)
+    }
+
+    private func sync() {
+        text = value == 0 ? "" : value.formatted(.number.precision(.fractionLength(0)))
+    }
+
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty || trimmed.lowercased() == "auto" {
+            value = 0
+        } else if let v = try? Double(trimmed, format: .number) {
+            value = min(max(v, range.lowerBound), range.upperBound).quantized(SettingStep.itemLength)
+        }
+        sync()   // parse failure or clamping: the field falls back to the stored value
     }
 }
 
@@ -370,7 +426,8 @@ struct DefaultsSettingsView: View {
                 }
                 HStack {
                     Text("Bar Thickness").frame(width: 130, alignment: .leading)
-                    SliderControl(value: $store.defaults.thickness, range: 36...280)
+                    NumberControl(value: $store.defaults.thickness, range: 36...280,
+                                  step: SettingStep.thickness)
                 }
                 HStack {
                     Text("Item Length").frame(width: 130, alignment: .leading)
@@ -378,19 +435,23 @@ struct DefaultsSettingsView: View {
                 }
                 HStack {
                     Text("Icon Size").frame(width: 130, alignment: .leading)
-                    SliderControl(value: $store.defaults.iconSize, range: 16...64)
+                    NumberControl(value: $store.defaults.iconSize, range: 16...64,
+                                  step: SettingStep.iconSize)
                 }
                 HStack {
                     Text("Text Size").frame(width: 130, alignment: .leading)
-                    SliderControl(value: $store.defaults.textSize, range: 9...20)
+                    NumberControl(value: $store.defaults.textSize, range: 9...20,
+                                  step: SettingStep.textSize)
                 }
                 HStack {
                     Text("Item Padding").frame(width: 130, alignment: .leading)
-                    SliderControl(value: $store.defaults.itemPadding, range: 0...24)
+                    NumberControl(value: $store.defaults.itemPadding, range: 0...24,
+                                  step: SettingStep.itemPadding)
                 }
                 HStack {
                     Text("Item Margin").frame(width: 130, alignment: .leading)
-                    SliderControl(value: $store.defaults.itemMargin, range: 0...24)
+                    NumberControl(value: $store.defaults.itemMargin, range: 0...24,
+                                  step: SettingStep.itemMargin)
                 }
                 HStack {
                     Text("Background Color").frame(width: 130, alignment: .leading)
@@ -480,7 +541,8 @@ struct MonitorSettingsView: View {
                 HStack {
                     Toggle("", isOn: enabled(\.thickness, \.thickness)).labelsHidden()
                     Text("Bar Thickness").frame(width: 130, alignment: .leading)
-                    SliderControl(value: value(\.thickness, \.thickness), range: 36...280)
+                    NumberControl(value: value(\.thickness, \.thickness), range: 36...280,
+                                  step: SettingStep.thickness)
                 }
                 HStack {
                     Toggle("", isOn: enabled(\.itemLength, \.itemLength)).labelsHidden()
@@ -490,22 +552,26 @@ struct MonitorSettingsView: View {
                 HStack {
                     Toggle("", isOn: enabled(\.iconSize, \.iconSize)).labelsHidden()
                     Text("Icon Size").frame(width: 130, alignment: .leading)
-                    SliderControl(value: value(\.iconSize, \.iconSize), range: 16...64)
+                    NumberControl(value: value(\.iconSize, \.iconSize), range: 16...64,
+                                  step: SettingStep.iconSize)
                 }
                 HStack {
                     Toggle("", isOn: enabled(\.textSize, \.textSize)).labelsHidden()
                     Text("Text Size").frame(width: 130, alignment: .leading)
-                    SliderControl(value: value(\.textSize, \.textSize), range: 9...20)
+                    NumberControl(value: value(\.textSize, \.textSize), range: 9...20,
+                                  step: SettingStep.textSize)
                 }
                 HStack {
                     Toggle("", isOn: enabled(\.itemPadding, \.itemPadding)).labelsHidden()
                     Text("Item Padding").frame(width: 130, alignment: .leading)
-                    SliderControl(value: value(\.itemPadding, \.itemPadding), range: 0...24)
+                    NumberControl(value: value(\.itemPadding, \.itemPadding), range: 0...24,
+                                  step: SettingStep.itemPadding)
                 }
                 HStack {
                     Toggle("", isOn: enabled(\.itemMargin, \.itemMargin)).labelsHidden()
                     Text("Item Margin").frame(width: 130, alignment: .leading)
-                    SliderControl(value: value(\.itemMargin, \.itemMargin), range: 0...24)
+                    NumberControl(value: value(\.itemMargin, \.itemMargin), range: 0...24,
+                                  step: SettingStep.itemMargin)
                 }
                 HStack {
                     Toggle("", isOn: enabled(\.backgroundColor, \.backgroundColor)).labelsHidden()
