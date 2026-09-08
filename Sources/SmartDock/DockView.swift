@@ -27,6 +27,7 @@ struct DockView: View {
     let store: OrderStore
     let settings: BarSettings
     @ObservedObject var hover: HoverModel
+    @ObservedObject var scroll: ScrollModel
 
     // Drag state, all frozen at grab time. Translation is measured in the bar's
     // coordinate space ("bar"), which never moves while the preview reflows.
@@ -41,20 +42,23 @@ struct DockView: View {
     private var iconSize: CGFloat { CGFloat(settings.iconSize) }
     private var pad: CGFloat { CGFloat(settings.itemPadding) }
     private var margin: CGFloat { CGFloat(settings.itemMargin) }
-    /// Explicit main-axis item length, or 0 for auto.
-    private var length: CGFloat { CGFloat(settings.itemLength) }
     private var itemWidth: CGFloat {
         if vertical { return max(24, settings.thickness - 2 * margin) }
-        return length > 0 ? length : 150
+        return CGFloat(settings.mainItemLength)
     }
     // Bottom bars: thickness sets the row height (icon centers within, but never clips).
     private var itemHeight: CGFloat {
-        if vertical { return length > 0 ? length : iconSize + 2 * pad }
+        if vertical { return CGFloat(settings.mainItemLength) }
         return max(settings.thickness - 2 * margin, iconSize + 2 * pad)
     }
-    private var slot: CGFloat { (vertical ? itemHeight : itemWidth) + margin }
+    private var slot: CGFloat { CGFloat(settings.mainSlot) }
+
+    /// Content longer than the panel (DockPanel measured it): the stack pins to the
+    /// start edge and slides by the scroll offset instead of following alignment.
+    private var overflowing: Bool { scroll.maxOffset > 0 }
 
     private var spanAlignment: Alignment {
+        if overflowing { return vertical ? .top : .leading }
         switch settings.itemAlignment {
         case .start: return vertical ? .top : .leading
         case .center: return .center
@@ -63,9 +67,9 @@ struct DockView: View {
     }
 
     /// Rounded only on the sides facing content — the bar sits flush on the screen edge.
-    /// Full-span bars are square.
+    /// Full-span bars are square; so are overflowing ones, which run edge to edge too.
     private var barShape: AnyShape {
-        if settings.fullSpan { return AnyShape(Rectangle()) }
+        if settings.fullSpan || overflowing { return AnyShape(Rectangle()) }
         let r: CGFloat = 14
         if #available(macOS 13.3, *) {
             switch settings.position {
@@ -129,8 +133,9 @@ struct DockView: View {
     }
 
     private func contentOrigin(in total: CGFloat) -> CGFloat {
+        if overflowing { return -scroll.offset }   // start-pinned content, slid by the offset
         guard settings.fullSpan else { return 0 }
-        let content = margin + CGFloat(displayed.count) * slot
+        let content = CGFloat(settings.contentLength(count: displayed.count))
         switch settings.itemAlignment {
         case .start: return 0
         case .center: return max(0, (total - content) / 2)
@@ -169,8 +174,10 @@ struct DockView: View {
         }
         .animation(.easeOut(duration: 0.15), value: displayed.map(\.id))
         .padding(margin)   // the bar's edge inset is the item margin: 0 → fully flush
-        .frame(maxWidth: settings.fullSpan && !vertical ? .infinity : nil,
-               maxHeight: settings.fullSpan && vertical ? .infinity : nil,
+        // The offset sits inside the frame: content slides, the bar background doesn't.
+        .offset(x: vertical ? 0 : -scroll.offset, y: vertical ? -scroll.offset : 0)
+        .frame(maxWidth: !vertical && (settings.fullSpan || overflowing) ? .infinity : nil,
+               maxHeight: vertical && (settings.fullSpan || overflowing) ? .infinity : nil,
                alignment: spanAlignment)
         .background {
             ZStack {
@@ -213,6 +220,7 @@ struct DockView: View {
                         dragID = win.id
                         dragBase = windows
                         dragFrom = idx
+                        scroll.dragging = true   // content must not slide mid-reorder
                     }
                     if dragID == win.id { dragDelta = t }
                 }
@@ -224,6 +232,7 @@ struct DockView: View {
                     dragID = nil
                     dragDelta = 0
                     dragBase = []
+                    scroll.dragging = false
                     guard wasDragging else { return focus(win) }
                     if let to, to != from {
                         store.handleDrop(of: win, from: from, to: to, in: base)

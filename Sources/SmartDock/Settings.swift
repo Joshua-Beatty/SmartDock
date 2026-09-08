@@ -70,6 +70,20 @@ struct BarSettings: Codable, Equatable {
     }
 }
 
+// MARK: - Main-axis geometry (single source of truth for DockView layout and DockPanel scrolling)
+
+extension BarSettings {
+    /// One item's length along the bar axis — mirrors DockView's itemWidth/itemHeight.
+    var mainItemLength: Double {
+        if itemLength > 0 { return itemLength }
+        return position == .bottom ? 150 : iconSize + 2 * itemPadding
+    }
+    /// Item length plus the inter-item gap: the bar's uniform slot unit.
+    var mainSlot: Double { mainItemLength + itemMargin }
+    /// Total content extent of `count` items, including the bar's edge padding.
+    func contentLength(count: Int) -> Double { itemMargin + Double(count) * mainSlot }
+}
+
 /// Per-monitor overrides; nil fields follow the defaults.
 struct MonitorSettings: Codable, Equatable {
     var name: String
