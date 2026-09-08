@@ -278,7 +278,7 @@ private struct AutoLengthControl: View {
     @FocusState private var focused: Bool
     @State private var text = ""
 
-    private let range: ClosedRange<Double> = 60...400
+    private let range: ClosedRange<Double> = 20...400
 
     var body: some View {
         Slider(value: Binding(get: { value == 0 ? 150 : value },

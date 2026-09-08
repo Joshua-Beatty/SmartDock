@@ -3,6 +3,24 @@ import ApplicationServices
 import Combine
 import SwiftUI
 
+/// Settings window that ends text editing when the user clicks anywhere outside
+/// the focused field. SwiftUI on macOS otherwise keeps the field first responder
+/// on background clicks, so typed values never commit (and the bars never update)
+/// until Return or Tab.
+private final class CommitOnClickWindow: NSWindow {
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown,
+           firstResponder is NSTextView,   // the shared field editor is active
+           let content = contentView, let root = content.superview {
+            let hit = content.hitTest(root.convert(event.locationInWindow, from: nil))
+            // Clicks inside the field editor itself keep editing (caret placement);
+            // everything else — empty space, sliders, other fields — commits first.
+            if !(hit is NSTextView) { makeFirstResponder(nil) }
+        }
+        super.sendEvent(event)
+    }
+}
+
 /// Tracks windows per display via the Accessibility API and drives one DockPanel per screen.
 final class DockController: NSObject {
     private let store = OrderStore()
@@ -135,9 +153,9 @@ final class DockController: NSObject {
 
     @objc private func openSettings() {
         if settingsWindow == nil {
-            let win = NSWindow(contentRect: .zero,
-                               styleMask: [.titled, .closable, .miniaturizable],
-                               backing: .buffered, defer: false)
+            let win = CommitOnClickWindow(contentRect: .zero,
+                                          styleMask: [.titled, .closable, .miniaturizable],
+                                          backing: .buffered, defer: false)
             win.title = "SmartDock Settings"
             win.contentView = NSHostingView(rootView: SettingsView(store: settings))
             win.setContentSize(NSSize(width: 680, height: 420))
