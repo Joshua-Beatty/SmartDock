@@ -67,6 +67,11 @@ final class DockController: NSObject {
          NSWorkspace.activeSpaceDidChangeNotification].forEach { name in
             wsnc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refresh() }
         }
+        // The window list lags the space-switch animation (entering/leaving full screen),
+        // so re-check once it settles instead of waiting for the next 1s poll.
+        wsnc.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+        }
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
@@ -241,6 +246,7 @@ final class DockController: NSObject {
         var windowsByScreen: [Int: [WindowInfo]] = [:]
         var allWindows: [WindowInfo] = []
         var titleBands: [CGRect] = []   // pre-filter strips for the zoom interceptor
+        var fullscreenAX: [(pid: pid_t, frame: CGRect)] = []   // native full-screen windows (any space)
 
         for app in regularApps where !app.isHidden && app.processIdentifier != myPid {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
@@ -271,6 +277,9 @@ final class DockController: NSObject {
 
                 if !isMinimized, let f = cgFrame {
                     titleBands.append(CGRect(x: f.minX, y: f.minY, width: f.width, height: 34))
+                    if attr(axWin, "AXFullScreen") as? Bool == true {
+                        fullscreenAX.append((app.processIdentifier, f))
+                    }
                 }
                 let title = attr(axWin, kAXTitleAttribute) as? String ?? ""
                 let appName = app.localizedName ?? "Unknown"
@@ -290,11 +299,53 @@ final class DockController: NSObject {
         store.sync(runningPids: Set(regularApps.map(\.processIdentifier)),
                    windows: allWindows)
 
+        let fullscreen = fullscreenScreens(screens, flipY: flipY, axFullscreen: fullscreenAX,
+                                           appPids: Set(regularApps.map(\.processIdentifier)), myPid: myPid)
         for (idx, panel) in panels.enumerated() {
             let eff = settings.effective(for: panel.displayUUID)
             let arranged = store.arrange(windowsByScreen[idx] ?? [])
-            panel.update(pinnedBar(arranged, pinned: eff.pinned, apps: regularApps), eff)
+            panel.update(pinnedBar(arranged, pinned: eff.pinned, apps: regularApps), eff,
+                         suppressed: fullscreen.contains(idx))
         }
+    }
+
+    /// Indices of screens currently showing a full-screen app. Two signals, both
+    /// checked against CGWindowList, which reports only what's actually on screen in
+    /// each display's *current* space (AX also returns full-screen windows parked on
+    /// other spaces, which must not hide the bar):
+    ///  - Native full screen: an on-screen window matching an `AXFullScreen` window's
+    ///    frame. Frame matching is needed because when the menu bar is set to stay
+    ///    visible in full screen, the window stops below it — it isn't screen-sized.
+    ///  - Borderless full screen (games, some players): a window covering the entire
+    ///    screen frame. Zoomed/filled windows stop at the menu bar, so they don't count.
+    private func fullscreenScreens(_ screens: [NSScreen], flipY: CGFloat,
+                                   axFullscreen: [(pid: pid_t, frame: CGRect)],
+                                   appPids: Set<pid_t>, myPid: pid_t) -> Set<Int> {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]] else { return [] }
+        let screenRects = screens.map { s in
+            CGRect(x: s.frame.minX, y: flipY - s.frame.maxY, width: s.frame.width, height: s.frame.height)
+        }
+        func same(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1
+                && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+        }
+        var result: Set<Int> = []
+        for info in list {
+            guard info[kCGWindowLayer as String] as? Int == 0,
+                  let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  pid != myPid, appPids.contains(pid),   // regular apps only — skips overlay utilities
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict) else { continue }
+            let native = axFullscreen.contains { $0.pid == pid && same($0.frame, bounds) }
+            for (idx, rect) in screenRects.enumerated() {
+                if same(bounds, rect) || (native && rect.contains(CGPoint(x: bounds.midX, y: bounds.midY))) {
+                    result.insert(idx)
+                }
+            }
+        }
+        return result
     }
 
     private func pinnedFingerprint() -> [String] {

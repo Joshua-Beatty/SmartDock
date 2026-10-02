@@ -123,10 +123,15 @@ final class DockPanel {
         scrollModel.scroll(by: -delta)
     }
 
-    func update(_ windows: [WindowInfo], _ settings: BarSettings) {
-        guard windows != lastWindows || settings != lastSettings else { return }
+    /// True while a full-screen app owns this display — the bar stays ordered out
+    /// so it never floats over full-screen video, games, or native full-screen spaces.
+    private var suppressed = false
+
+    func update(_ windows: [WindowInfo], _ settings: BarSettings, suppressed: Bool = false) {
+        guard windows != lastWindows || settings != lastSettings || suppressed != self.suppressed else { return }
         lastWindows = windows
         lastSettings = settings
+        self.suppressed = suppressed
         render()
     }
 
@@ -141,7 +146,7 @@ final class DockPanel {
         let windows = lastWindows ?? []
         hosting.rootView = DockView(windows: windows, store: store, settings: lastSettings,
                                     hover: hoverModel, scroll: scrollModel)
-        guard !windows.isEmpty else {
+        guard !windows.isEmpty, !suppressed else {
             updateScrollBounds(maxOffset: 0)
             return panel.orderOut(nil)
         }
